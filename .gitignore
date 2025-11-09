@@ -1,0 +1,43 @@
+# Binaries (root level only)
+/flin
+/kvserver
+/flin-cluster
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Data directories
+data/
+*/data/
+**/data/
+
+# Temporary files
+*.tmp
+*.log
+/tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+bin/
+
+# Go workspace file
+go.work
