@@ -32,14 +32,21 @@ WORKDIR /root/
 COPY --from=builder /app/flin .
 COPY --from=builder /app/kvserver .
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Create data directory
 RUN mkdir -p /data
 
 # Set environment variables
 ENV FLIN_DATA_DIR=/data
 
-# Expose server port
-EXPOSE 6380
+# Expose ports
+EXPOSE 6380 8080 9080
 
-# Default command (can be overridden)
-CMD ["./flin", "help"]
+# Install curl for healthcheck
+RUN apk --no-cache add curl
+
+# Use entrypoint script
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

@@ -1,6 +1,7 @@
-# Binaries
-flin
-kvserver
+# Binaries (root level only)
+/flin
+/kvserver
+/flin-cluster
 *.exe
 *.dll
 *.so

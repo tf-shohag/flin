@@ -19,45 +19,40 @@ See [BENCHMARKS.md](./BENCHMARKS.md) for detailed performance analysis.
 
 ## 🚀 Quick Start
 
-### Using Docker (Recommended)
+### 1. Test Single Node
 
 ```bash
-# Build and start
-make docker-build
-make docker-run
-
-# Use CLI
-make docker-cli ARGS='set mykey "hello world"'
-make docker-cli ARGS='get mykey'
-
-# Run benchmark
-make docker-benchmark
+./test-single-node.sh
 ```
 
-See [DOCKER.md](./DOCKER.md) for complete Docker guide.
+This will:
+- Build and start a single Flin node
+- Run a 10-second benchmark with 128 workers
+- Show throughput and latency
+- Clean up automatically
 
-### Using CLI
+Expected: **~90K ops/sec**
+
+### 2. Test 3-Node Cluster
 
 ```bash
-# Build
-make build-cli
-
-# Basic operations
-./flin set mykey "hello world"
-./flin set session:123 "data" 3600  # with TTL
-./flin get mykey
-./flin delete mykey
-./flin exists mykey
-
-# Run benchmark
-./flin benchmark
+./test-3-node-cluster.sh
 ```
 
-### As an Embedded Library
+This will:
+- Start a 3-node Docker cluster with Raft consensus
+- Wait for all nodes to be healthy
+- Run benchmark on all nodes simultaneously (384 workers total)
+- Show per-node and cluster-wide throughput
+- Calculate scaling efficiency
+- Clean up automatically
+
+Expected: **~300K+ ops/sec** (cluster-wide, 3x scaling)
+
+### 3. As an Embedded Library
 
 ```go
 import "github.com/skshohagmiah/flin/internal/kv"
-
 store, _ := kv.New("./data")
 defer store.Close()
 
@@ -118,25 +113,20 @@ make build
 
 Flin uses **NATS-style architecture** for extreme performance:
 
-- **Per-connection goroutines** (not per-request!)
 - **Inline processing** (no spawning overhead)
 - **Buffered channels** for async I/O
-- **Lock-free operations** where possible
-- **Optimized BadgerDB** (512MB caches, async writes)
-- **Optimal concurrency** (4 workers, not 100!)
 
 ## ⚡ Core Features
 
-- 🚀 **High Performance** - NATS-level throughput (100K+ ops/sec)
+- 🌐 **Distributed** - Raft consensus with ClusterKit coordination
+- 🔄 **Auto Partitioning** - 64 partitions with consistent hashing
+- 🛡️ **Fault Tolerant** - 3x replication, survives node failures
+- ⚖️ **Auto Rebalancing** - Partitions redistribute on topology changes
+- 🚀 **High Performance** - 40-50K SET, 200-300K GET ops/sec per node
 - 💾 **Persistent Storage** - BadgerDB LSM tree with caching
-- 🔄 **Buffer Pooling** - `sync.Pool` for zero allocations
-- 📦 **Batch Operations** - 5-10x throughput improvement
-- 🎯 **Stack Allocations** - No heap escape for small buffers
+- 📡 **Topology-Aware Client** - Smart routing and automatic failover
 - ⏱️ **TTL Support** - Automatic expiration
 - 🐳 **Docker Ready** - Production-ready containers
-- 🛠️ **CLI Tool** - Easy command-line interface
-
-## 📊 Benchmark Results
 
 | Operation | Throughput | Latency | Notes |
 |-----------|------------|---------|-------|
@@ -144,7 +134,6 @@ Flin uses **NATS-style architecture** for extreme performance:
 | **GET** | 787K ops/sec | 4 μs | Cache-optimized |
 | **MIXED** | 140K ops/sec | 28 μs | 70% reads, 30% writes |
 | **DELETE** | 165K ops/sec | 23 μs | Fast tombstones |
-
 **Batch Operations:**
 - BatchSet: 500K-1M+ ops/sec
 - BatchGet: 1M-2M+ ops/sec
