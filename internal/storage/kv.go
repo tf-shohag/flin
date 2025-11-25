@@ -24,17 +24,17 @@ func NewKVStorage(path string) (*Storage, error) {
 
 	// Extreme performance optimizations (tuned for 1M+ ops/sec)
 	opts.NumVersionsToKeep = 1        // Keep only latest version
-	opts.NumLevelZeroTables = 20      // More L0 tables before compaction (doubled)
+	opts.NumLevelZeroTables = 10      // More L0 tables before compaction (doubled)
 	opts.NumLevelZeroTablesStall = 20 // Higher stall threshold
 	opts.ValueLogFileSize = 512 << 20 // 512MB value log files (doubled)
-	opts.NumCompactors = 6            // More compactors for parallel work (doubled)
+	opts.NumCompactors = 4            // More compactors for parallel work (doubled)
 	opts.ValueThreshold = 1024        // Store values > 1KB in value log
 	opts.BlockCacheSize = 2 << 30     // 2GB block cache (4x increase)
 	opts.IndexCacheSize = 1 << 30     // 1GB index cache (2x increase)
 	opts.SyncWrites = false           // Async writes for speed
 	opts.DetectConflicts = false      // Disable conflict detection for speed
 	opts.CompactL0OnClose = false     // Skip compaction on close
-	opts.MemTableSize = 256 << 20     // 128MB memtable (larger for more buffering)
+	opts.MemTableSize = 128 << 20     // 128MB memtable (larger for more buffering)
 
 	db, err := badger.Open(opts)
 	if err != nil {

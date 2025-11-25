@@ -20,9 +20,9 @@ var (
 	raftAddr       = flag.String("raft", ":9080", "Raft address for cluster consensus")
 	joinAddr       = flag.String("join", "", "Address of node to join (empty for bootstrap)")
 	dataDir        = flag.String("data", "./data", "Data directory")
-	kvPort         = flag.String("port", ":6380", " Server port")
+	kvPort         = flag.String("port", ":6380", "KV server port")
 	partitionCount = flag.Int("partitions", 64, "Number of partitions")
-	workerCount    = flag.Int("workers", 256, "Number of worker goroutines")
+	workerCount    = flag.Int("workers", 64, "Number of worker goroutines")
 	useMemory      = flag.Bool("memory", false, "Use in-memory storage (like Redis)")
 )
 
@@ -32,8 +32,8 @@ func main() {
 	if *nodeID == "" {
 		fmt.Println("Error: -node-id is required")
 		fmt.Println("\nFlin is a distributed KV store. Usage:")
-		fmt.Println("  ./server -node-id=node-1 -http=:8080 -raft=:9080 -port=:6380")
-		fmt.Println("  ./server -node-id=node-2 -http=:8081 -raft=:9081 -port=:6381 -join=localhost:8080")
+		fmt.Println("  ./kvserver -node-id=node-1 -http=:8080 -raft=:9080 -port=:6380")
+		fmt.Println("  ./kvserver -node-id=node-2 -http=:8081 -raft=:9081 -port=:6381 -join=localhost:8080")
 		os.Exit(1)
 	}
 
@@ -112,7 +112,7 @@ func main() {
 
 	log.Printf("✅ ClusterKit started")
 
-	// Create  server with custom worker count
+	// Create KV server with custom worker count
 	srv, err := server.NewKVServerWithWorkers(store, ck, *kvPort, *nodeID, *workerCount)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
@@ -132,7 +132,7 @@ func main() {
 	}()
 
 	// Start server
-	log.Printf("🚀 Server listening on %s", *kvPort)
+	log.Printf("🚀 KV server listening on %s", *kvPort)
 	if err := srv.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}

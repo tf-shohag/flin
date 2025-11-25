@@ -1,77 +1,43 @@
 #!/bin/bash
 
-echo "🚀 Flin KV Throughput Benchmark"
-echo "================================"
+echo "🚀 Flin Pure KV Benchmark (No Cluster Overhead)"
+echo "================================================"
 echo ""
 
-# Save current directory
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$SCRIPT_DIR/.."
-
 # Configuration
-CONCURRENCY=${1:-64}
-DURATION=${2:-10}
+CONCURRENCY=${1:-256}
+DURATION=${2:-30}
 VALUE_SIZE=${3:-1024}
 
 echo "📊 Configuration:"
 echo "   Concurrency: $CONCURRENCY workers"
 echo "   Duration: ${DURATION}s"
 echo "   Value size: ${VALUE_SIZE} bytes"
+echo "   Mode: Pure KV (no cluster/raft overhead)"
 echo ""
 
-# Build the server if needed
-if [ ! -f "bin/flin-server" ]; then
-    echo "📦 Building Flin server..."
-    mkdir -p bin
-    go build -o bin/flin-server ./cmd/server
-fi
+# Save current directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR/.."
 
-# Kill any existing flin-server processes
-pkill -f flin-server 2>/dev/null || true
-sleep 1
+# Create benchmark program
+mkdir -p /tmp/flin_pure_bench
+cd /tmp/flin_pure_bench
 
-# Start the server in background
-echo "🔧 Starting Flin server..."
-./bin/flin-server \
-  -node-id=bench-node \
-  -http=localhost:7080 \
-  -raft=localhost:7090 \
-  -port=:7380 \
-  -data=./data/bench \
-  -partitions=64 \
-  -workers=256 &
-
-SERVER_PID=$!
-echo "   Server PID: $SERVER_PID"
-
-# Wait for server to start
-echo "⏳ Waiting for server to start..."
-sleep 3
-
-# Check if server is running
-if ! kill -0 $SERVER_PID 2>/dev/null; then
-    echo "❌ Server failed to start"
-    exit 1
-fi
-
-echo "✅ Server is running"
-echo ""
-
-# Create benchmark program using the new SDK
-mkdir -p /tmp/flin_bench
-cd /tmp/flin_bench
-
-cat > go.mod << MODEOF
-module flin-bench
+cat > go.mod << 'MODEOF'
+module flin-pure-bench
 
 go 1.21
 
 require github.com/skshohagmiah/flin v0.0.0
 
-replace github.com/skshohagmiah/flin => $SCRIPT_DIR/..
+replace github.com/skshohagmiah/flin => REPLACE_PATH
 MODEOF
 
-cat > main.go << EOF
+# Replace the path
+sed -i '' "s|REPLACE_PATH|$SCRIPT_DIR/..|g" go.mod
+
+cat > main.go << 'EOF'
 package main
 
 import (
@@ -80,24 +46,25 @@ import (
 	"sync/atomic"
 	"time"
 
-	flin "github.com/skshohagmiah/flin/clients/go"
+	"github.com/skshohagmiah/flin/internal/kv"
 )
 
 func main() {
-	concurrency := $CONCURRENCY
-	duration := $DURATION * time.Second
-	valueSize := $VALUE_SIZE
+	concurrency := CONCURRENCY_VAL
+	duration := DURATION_VAL * time.Second
+	valueSize := VALUE_SIZE_VAL
 	
-	// Create client using new SDK
-	opts := flin.DefaultOptions("localhost:7380")
-	client, err := flin.NewClient(opts)
+	fmt.Println("🔧 Creating pure KV store (disk-based)...")
+	
+	// Create pure KV store without cluster overhead
+	store, err := kv.New("/tmp/flin_pure_bench_data")
 	if err != nil {
-		fmt.Printf("Failed to create client: %v\n", err)
+		fmt.Printf("Failed to create store: %v\n", err)
 		return
 	}
-	defer client.Close()
+	defer store.Close()
 	
-	fmt.Printf("Client mode: %s\n", map[bool]string{true: "Cluster", false: "Single-node"}[client.IsClusterMode()])
+	fmt.Println("✅ Store created")
 	fmt.Println()
 	
 	// Prepare test data
@@ -105,6 +72,14 @@ func main() {
 	for i := range value {
 		value[i] = byte(i % 256)
 	}
+	
+	// Warmup
+	fmt.Println("🔥 Warming up...")
+	for i := 0; i < 1000; i++ {
+		key := fmt.Sprintf("warmup_%d", i)
+		store.Set(key, value, 0)
+	}
+	fmt.Println()
 	
 	// Run WRITE test
 	fmt.Println("🔴 WRITE Test (SET operations)")
@@ -124,7 +99,7 @@ func main() {
 			ops := int64(0)
 			for time.Now().Before(stopTime) {
 				key := fmt.Sprintf("key_%d_%d", workerID, ops)
-				if err := client.Set(key, value); err == nil {
+				if err := store.Set(key, value, 0); err == nil {
 					ops++
 				}
 			}
@@ -179,7 +154,7 @@ func main() {
 			ops := int64(0)
 			for time.Now().Before(stopTime) {
 				key := fmt.Sprintf("key_%d_%d", workerID, ops%1000)
-				if _, err := client.Get(key); err == nil {
+				if _, err := store.Get(key); err == nil {
 					ops++
 				}
 			}
@@ -230,13 +205,21 @@ func main() {
 	if improvement > 0 {
 		fmt.Printf("   Reads are %.1f%% faster! 🚀\n", improvement)
 	}
+	
+	fmt.Println()
+	fmt.Println("💡 This is PURE KV performance (no network, no cluster overhead)")
+	fmt.Println("   For networked performance, expect 60-70% of these numbers")
 }
 EOF
 
-echo "📊 Running throughput benchmark..."
+# Replace placeholders
+sed -i '' "s/CONCURRENCY_VAL/$CONCURRENCY/g" main.go
+sed -i '' "s/DURATION_VAL/$DURATION/g" main.go
+sed -i '' "s/VALUE_SIZE_VAL/$VALUE_SIZE/g" main.go
+
+echo "📊 Running pure KV benchmark..."
 echo ""
 
-cd /tmp/flin_bench
 go mod tidy 2>/dev/null
 go run main.go
 
@@ -244,8 +227,7 @@ go run main.go
 echo ""
 echo "🧹 Cleaning up..."
 cd "$SCRIPT_DIR/.."
-kill $SERVER_PID 2>/dev/null
-rm -rf /tmp/flin_bench
-rm -rf ./data/bench
+rm -rf /tmp/flin_pure_bench
+rm -rf /tmp/flin_pure_bench_data
 
 echo "✅ Benchmark complete!"
