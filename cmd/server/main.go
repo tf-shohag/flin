@@ -22,7 +22,7 @@ var (
 	dataDir        = flag.String("data", "./data", "Data directory")
 	kvPort         = flag.String("port", ":6380", "KV server port")
 	partitionCount = flag.Int("partitions", 64, "Number of partitions")
-	workerCount    = flag.Int("workers", 256, "Number of worker goroutines")
+	workerCount    = flag.Int("workers", 64, "Number of worker goroutines")
 	useMemory      = flag.Bool("memory", false, "Use in-memory storage (like Redis)")
 )
 
@@ -46,7 +46,7 @@ func main() {
 	fmt.Printf("   HTTP:     %s\n", *httpAddr)
 	fmt.Printf("   Raft:     %s\n", *raftAddr)
 	fmt.Printf("   KV Port:  %s\n", *kvPort)
-	
+
 	if *useMemory {
 		fmt.Printf("   Storage:  IN-MEMORY (like Redis)\n")
 		fmt.Printf("   ⚠️  Data will be lost on restart!\n")
@@ -54,7 +54,7 @@ func main() {
 		fmt.Printf("   Storage:  DISK (BadgerDB)\n")
 		fmt.Printf("   Data Dir: %s\n", *dataDir)
 	}
-	
+
 	if *joinAddr != "" {
 		fmt.Printf("   Join:     %s\n", *joinAddr)
 	} else {
@@ -65,7 +65,7 @@ func main() {
 	// Create local KV store (memory or disk)
 	var store *kv.KVStore
 	var err error
-	
+
 	if *useMemory {
 		fmt.Println("📦 Creating in-memory KV store...")
 		store, err = kv.NewMemory()

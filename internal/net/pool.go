@@ -35,8 +35,8 @@ type PoolOptions struct {
 func DefaultPoolOptions(address string) *PoolOptions {
 	return &PoolOptions{
 		Address:      address,
-		MinSize:      5,
-		MaxSize:      50,
+		MinSize:      64,  // Increased from 5 for high concurrency
+		MaxSize:      256, // Increased from 50 for high concurrency
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,

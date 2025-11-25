@@ -7,11 +7,14 @@ RUN apk add --no-cache git make
 # Set working directory
 WORKDIR /app
 
-# Copy go mod files
+# Copy go mod files and clients directory (needed for local replace directive)
 COPY go.mod go.sum ./
+COPY clients/ ./clients/
+
+# Download dependencies (now clients/go exists for the replace directive)
 RUN go mod download
 
-# Copy source code
+# Copy rest of source code
 COPY . .
 
 # Build the CLI

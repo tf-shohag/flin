@@ -78,8 +78,8 @@ type ClientOptions struct {
 func DefaultOptions(address string) *ClientOptions {
 	return &ClientOptions{
 		Address:               address,
-		MinConnectionsPerNode: 5,
-		MaxConnectionsPerNode: 50,
+		MinConnectionsPerNode: 128, // Increased from 5 to support high concurrency
+		MaxConnectionsPerNode: 512, // Increased from 50 to support 256+ workers
 		DialTimeout:           5 * time.Second,
 		ReadTimeout:           10 * time.Second,
 		WriteTimeout:          10 * time.Second,
@@ -395,6 +395,31 @@ func (c *Client) Set(key string, value []byte) error {
 		return fmt.Errorf("partition %d not found in topology", partitionID)
 	}
 
+	// Fast path: single node (no replicas)
+	if len(partition.ReplicaNodes) == 0 {
+		c.mu.RLock()
+		pool, exists := c.pools[partition.PrimaryNode]
+		c.mu.RUnlock()
+
+		if !exists {
+			return fmt.Errorf("pool not found for node %s", partition.PrimaryNode)
+		}
+
+		conn, err := pool.Get()
+		if err != nil {
+			return err
+		}
+		defer pool.Put(conn)
+
+		request := protocol.EncodeSetRequest(key, value)
+		if err := conn.Write(request); err != nil {
+			return err
+		}
+
+		return readOKResponse(conn)
+	}
+
+	// Slow path: replicated write (cluster mode)
 	// Get all nodes (primary + replicas)
 	nodes := []string{partition.PrimaryNode}
 	nodes = append(nodes, partition.ReplicaNodes...)

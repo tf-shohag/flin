@@ -70,10 +70,10 @@ type Connection struct {
 
 // Job represents a work item for the worker pool
 type Job struct {
-	conn      *Connection
-	cmd       string
-	key       string
-	value     []byte
+	conn  *Connection
+	cmd   string
+	key   string
+	value []byte
 	// Batch operation fields
 	keys      []string
 	values    [][]byte
@@ -98,7 +98,7 @@ const (
 	FastPathThreshold = 100 * time.Microsecond
 
 	// Worker pool size (optimized for maximum throughput)
-	DefaultWorkerPoolSize = 256
+	DefaultWorkerPoolSize = 64
 
 	// Job queue buffer size (increased for higher throughput)
 	DefaultJobQueueSize = 50000
@@ -544,40 +544,40 @@ func (c *Connection) processRequestBinary(data []byte, startTime time.Time) {
 // Binary operation handlers (fast path - inline processing)
 func (c *Connection) processBinarySet(req *protocol.Request, startTime time.Time) {
 	err := c.server.store.Set(req.Key, req.Value, 0)
-	
+
 	var response []byte
 	if err != nil {
 		response = protocol.EncodeErrorResponse(err)
 	} else {
 		response = protocol.EncodeOKResponse()
 	}
-	
+
 	c.sendBinaryResponse(response, startTime)
 }
 
 func (c *Connection) processBinaryGet(req *protocol.Request, startTime time.Time) {
 	val, err := c.server.store.Get(req.Key)
-	
+
 	var response []byte
 	if err != nil {
 		response = protocol.EncodeErrorResponse(err)
 	} else {
 		response = protocol.EncodeValueResponse(val)
 	}
-	
+
 	c.sendBinaryResponse(response, startTime)
 }
 
 func (c *Connection) processBinaryDel(req *protocol.Request, startTime time.Time) {
 	err := c.server.store.Delete(req.Key)
-	
+
 	var response []byte
 	if err != nil {
 		response = protocol.EncodeErrorResponse(err)
 	} else {
 		response = protocol.EncodeOKResponse()
 	}
-	
+
 	c.sendBinaryResponse(response, startTime)
 }
 
@@ -587,22 +587,22 @@ func (c *Connection) processBinaryMSet(req *protocol.Request, startTime time.Tim
 	for i, key := range req.Keys {
 		kvPairs[key] = req.Values[i]
 	}
-	
+
 	err := c.server.store.BatchSet(kvPairs, 0)
-	
+
 	var response []byte
 	if err != nil {
 		response = protocol.EncodeErrorResponse(err)
 	} else {
 		response = protocol.EncodeOKResponse()
 	}
-	
+
 	c.sendBinaryResponse(response, startTime)
 }
 
 func (c *Connection) processBinaryMGet(req *protocol.Request, startTime time.Time) {
 	results, err := c.server.store.BatchGet(req.Keys)
-	
+
 	var response []byte
 	if err != nil {
 		response = protocol.EncodeErrorResponse(err)
@@ -618,20 +618,20 @@ func (c *Connection) processBinaryMGet(req *protocol.Request, startTime time.Tim
 		}
 		response = protocol.EncodeMultiValueResponse(values)
 	}
-	
+
 	c.sendBinaryResponse(response, startTime)
 }
 
 func (c *Connection) processBinaryMDel(req *protocol.Request, startTime time.Time) {
 	err := c.server.store.BatchDelete(req.Keys)
-	
+
 	var response []byte
 	if err != nil {
 		response = protocol.EncodeErrorResponse(err)
 	} else {
 		response = protocol.EncodeOKResponse()
 	}
-	
+
 	c.sendBinaryResponse(response, startTime)
 }
 
@@ -641,7 +641,7 @@ func (c *Connection) sendBinaryResponse(response []byte, startTime time.Time) {
 		c.server.opsProcessed.Add(1)
 		c.server.opsFastPath.Add(1)
 		c.opsProcessed.Add(1)
-		
+
 		latency := time.Since(startTime)
 		c.updateAvgLatency(latency)
 	case <-c.ctx.Done():
