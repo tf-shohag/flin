@@ -3,7 +3,6 @@ package storage
 import (
 	"encoding/binary"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
@@ -13,13 +12,6 @@ var (
 	ErrKeyNotFound = errors.New("key not found")
 	ErrInvalidKey  = errors.New("invalid key")
 )
-
-// Buffer pool for zero-allocation operations
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 8192) // 8KB buffers
-	},
-}
 
 type Storage struct {
 	db *badger.DB
