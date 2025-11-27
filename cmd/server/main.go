@@ -13,6 +13,7 @@ import (
 	"github.com/skshohagmiah/flin/internal/kv"
 	"github.com/skshohagmiah/flin/internal/queue"
 	"github.com/skshohagmiah/flin/internal/server"
+	"github.com/skshohagmiah/flin/internal/stream"
 )
 
 var (
@@ -33,14 +34,13 @@ func main() {
 
 	if *nodeID == "" {
 		fmt.Println("Error: -node-id is required")
-		fmt.Println("\nFlin is a distributed KV store. Usage:")
+		fmt.Println("\nFlin is a distributed data system. Usage:")
 		fmt.Println("  ./kvserver -node-id=node-1 -http=:8080 -raft=:9080 -port=:6380")
 		fmt.Println("  ./kvserver -node-id=node-2 -http=:8081 -raft=:9081 -port=:6381 -join=localhost:8080")
 		os.Exit(1)
 	}
 
-	fmt.Println("🚀 Flin Distributed KV Store + Queue")
-	fmt.Println("   - ClusterKit coordination")
+	fmt.Println("🚀 Flin Distributed KV Store + Queue + Stream")
 	fmt.Println("   - Raft consensus")
 	fmt.Println("   - Automatic partitioning & replication")
 	fmt.Println()
@@ -94,6 +94,15 @@ func main() {
 	}
 	defer queueStore.Close()
 
+	// Create Stream store (always disk-based)
+	streamDataDir := *dataDir + "/stream"
+	fmt.Printf("📦 Creating disk-based Stream store at %s...\n", streamDataDir)
+	streamStore, err := stream.New(streamDataDir)
+	if err != nil {
+		log.Fatalf("Failed to create stream store: %v", err)
+	}
+	defer streamStore.Close()
+
 	// Create ClusterKit instance
 	ckOptions := clusterkit.Options{
 		NodeID:            *nodeID,
@@ -124,15 +133,17 @@ func main() {
 
 	log.Printf("✅ ClusterKit started")
 
-	// Initialize unified server (KV + Queue)
+	// Initialize unified server (KV + Queue + Stream)
 	srv, err := server.NewServerWithWorkers(
 		store,
 		queueStore,
+		streamStore,
 		ck,
 		*kvPort,
 		*nodeID,
 		*workerCount,
 	)
+
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
@@ -162,6 +173,7 @@ func main() {
 		ck.Stop()
 		store.Close()
 		queueStore.Close()
+		streamStore.Close()
 		os.Exit(0)
 	}()
 

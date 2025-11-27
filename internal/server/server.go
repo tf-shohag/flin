@@ -14,6 +14,7 @@ import (
 	"github.com/skshohagmiah/flin/internal/kv"
 	"github.com/skshohagmiah/flin/internal/protocol"
 	"github.com/skshohagmiah/flin/internal/queue"
+	"github.com/skshohagmiah/flin/internal/stream"
 )
 
 // Buffer pool for connection buffers (32KB each)
@@ -28,6 +29,7 @@ var bufferPool = sync.Pool{
 type Server struct {
 	store       *kv.KVStore
 	queue       *queue.Queue
+	stream      *stream.Stream
 	ck          *clusterkit.ClusterKit
 	listener    net.Listener
 	connections sync.Map
@@ -108,11 +110,14 @@ const (
 
 // NewServer creates a new distributed KV server with hybrid architecture
 func NewServer(store *kv.KVStore, q *queue.Queue, ck *clusterkit.ClusterKit, addr string, nodeID string) (*Server, error) {
-	return NewServerWithWorkers(store, q, ck, addr, nodeID, DefaultWorkerPoolSize)
+	// The original NewServer function does not take a stream parameter.
+	// Assuming a nil stream for this call, or it needs to be updated to pass one.
+	// For now, passing nil for stream.
+	return NewServerWithWorkers(store, q, nil, ck, addr, nodeID, DefaultWorkerPoolSize)
 }
 
 // NewServerWithWorkers creates a server with custom worker count
-func NewServerWithWorkers(store *kv.KVStore, q *queue.Queue, ck *clusterkit.ClusterKit, addr string, nodeID string, workerCount int) (*Server, error) {
+func NewServerWithWorkers(store *kv.KVStore, q *queue.Queue, stream *stream.Stream, ck *clusterkit.ClusterKit, addr string, nodeID string, workerCount int) (*Server, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen: %w", err)
@@ -125,6 +130,7 @@ func NewServerWithWorkers(store *kv.KVStore, q *queue.Queue, ck *clusterkit.Clus
 	srv := &Server{
 		store:    store,
 		queue:    q,
+		stream:   stream, // Initialize the new stream field
 		ck:       ck,
 		listener: listener,
 		nodeID:   nodeID,
@@ -476,8 +482,8 @@ func (c *Connection) writeLoop() {
 func (c *Connection) processRequestHybrid(data []byte) {
 	startTime := time.Now()
 
-	// Detect protocol: binary starts with opcode 0x01-0x12 (KV) or 0x20-0x24 (Queue), text starts with ASCII letters
-	isBinary := len(data) > 0 && ((data[0] >= 0x01 && data[0] <= 0x12) || (data[0] >= 0x20 && data[0] <= 0x24))
+	// Detect protocol: binary starts with opcode 0x01-0x12 (KV) or 0x20-0x24 (Queue) or 0x30-0x36 (Stream), text starts with ASCII letters
+	isBinary := len(data) > 0 && ((data[0] >= 0x01 && data[0] <= 0x12) || (data[0] >= 0x20 && data[0] <= 0x24) || (data[0] >= 0x30 && data[0] <= 0x36))
 
 	if isBinary {
 		c.processRequestBinary(data, startTime)
@@ -548,6 +554,18 @@ func (c *Connection) processRequestBinary(data []byte, startTime time.Time) {
 		c.processBinaryQLen(req, startTime)
 	case protocol.OpQClear:
 		c.processBinaryQClear(req, startTime)
+	case protocol.OpSPublish:
+		c.processBinarySPublish(req, startTime)
+	case protocol.OpSConsume:
+		c.processBinarySConsume(req, startTime)
+	case protocol.OpSCommit:
+		c.processBinarySCommit(req, startTime)
+	case protocol.OpSCreateTopic:
+		c.processBinarySCreateTopic(req, startTime)
+	case protocol.OpSSubscribe:
+		c.processBinarySSubscribe(req, startTime)
+	case protocol.OpSUnsubscribe:
+		c.processBinarySUnsubscribe(req, startTime)
 	default:
 		c.sendBinaryError(fmt.Errorf("unknown opcode"))
 		c.server.opsErrors.Add(1)

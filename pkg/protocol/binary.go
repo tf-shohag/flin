@@ -61,6 +61,22 @@ const (
 	OpQLen   byte = 0x23
 	OpQClear byte = 0x24
 
+	// Stream operation codes
+	OpSPublish     byte = 0x30
+	OpSConsume     byte = 0x31
+	OpSCommit      byte = 0x32
+	OpSCreateTopic byte = 0x33
+	OpSSubscribe   byte = 0x34
+	OpSUnsubscribe byte = 0x35
+	OpSGetOffsets  byte = 0x36
+
+	// DocStore operation codes
+	OpDocInsert byte = 0x40
+	OpDocFind   byte = 0x41
+	OpDocUpdate byte = 0x42
+	OpDocDelete byte = 0x43
+	OpDocIndex  byte = 0x44
+
 	// Status codes
 	StatusOK         byte = 0x00
 	StatusError      byte = 0x01
@@ -80,6 +96,17 @@ type Request struct {
 	Value  []byte
 	Keys   []string
 	Values [][]byte
+
+	// Stream fields
+	Topic       string
+	Partition   int
+	Group       string
+	Consumer    string
+	Count       int
+	RetentionMs int64
+
+	// DocStore fields
+	Collection string
 }
 
 // Response represents a binary response
@@ -368,6 +395,18 @@ func DecodeRequest(data []byte) (*Request, error) {
 		return decodeQPushRequest(payload)
 	case OpQPop, OpQPeek, OpQLen, OpQClear:
 		return decodeSimpleRequest(req.OpCode, payload)
+	case OpSPublish:
+		return decodeSPublishRequest(payload)
+	case OpSConsume:
+		return decodeSConsumeRequest(payload)
+	case OpSCommit:
+		return decodeSCommitRequest(payload)
+	case OpSCreateTopic:
+		return decodeSCreateTopicRequest(payload)
+	case OpSSubscribe:
+		return decodeSSubscribeRequest(payload)
+	case OpSUnsubscribe:
+		return decodeSUnsubscribeRequest(payload) // Note: I need to add this function too, I missed it in previous step
 	default:
 		return nil, fmt.Errorf("unknown opcode: %d", req.OpCode)
 	}
@@ -654,4 +693,744 @@ func decodeMultiValueResponse(payload []byte) (*Response, error) {
 	}
 
 	return resp, nil
+}
+
+// EncodeSPublishRequest encodes a SPUBLISH request
+func EncodeSPublishRequest(topic string, partition int, key string, value []byte) []byte {
+	topicLen := len(topic)
+	keyLen := len(key)
+	valueLen := len(value)
+
+	// Format: [1:opcode][4:payloadLen][2:topicLen][topic][4:partition][2:keyLen][key][4:valueLen][value]
+	totalSize := 1 + 4 + 2 + topicLen + 4 + 2 + keyLen + 4 + valueLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpSPublish
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(topicLen))
+	pos += 2
+	copy(buf[pos:], topic)
+	pos += topicLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(partition))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(keyLen))
+	pos += 2
+	copy(buf[pos:], key)
+	pos += keyLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(valueLen))
+	pos += 4
+	copy(buf[pos:], value)
+
+	return buf
+}
+
+// EncodeSConsumeRequest encodes a SCONSUME request
+func EncodeSConsumeRequest(topic, group, consumer string, count int) []byte {
+	topicLen := len(topic)
+	groupLen := len(group)
+	consumerLen := len(consumer)
+
+	// Format: [1:opcode][4:payloadLen][2:topicLen][topic][2:groupLen][group][2:consumerLen][consumer][4:count]
+	totalSize := 1 + 4 + 2 + topicLen + 2 + groupLen + 2 + consumerLen + 4
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpSConsume
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(topicLen))
+	pos += 2
+	copy(buf[pos:], topic)
+	pos += topicLen
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(groupLen))
+	pos += 2
+	copy(buf[pos:], group)
+	pos += groupLen
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(consumerLen))
+	pos += 2
+	copy(buf[pos:], consumer)
+	pos += consumerLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(count))
+
+	return buf
+}
+
+// EncodeSCommitRequest encodes a SCOMMIT request
+func EncodeSCommitRequest(topic, group string, partition int, offset int64) []byte {
+	topicLen := len(topic)
+	groupLen := len(group)
+
+	// Format: [1:opcode][4:payloadLen][2:topicLen][topic][2:groupLen][group][4:partition][8:offset]
+	totalSize := 1 + 4 + 2 + topicLen + 2 + groupLen + 4 + 8
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpSCommit
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(topicLen))
+	pos += 2
+	copy(buf[pos:], topic)
+	pos += topicLen
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(groupLen))
+	pos += 2
+	copy(buf[pos:], group)
+	pos += groupLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(partition))
+	pos += 4
+
+	binary.BigEndian.PutUint64(buf[pos:], uint64(offset))
+
+	return buf
+}
+
+// EncodeSCreateTopicRequest encodes a SCREATETOPIC request
+func EncodeSCreateTopicRequest(name string, partitions int, retentionMs int64) []byte {
+	nameLen := len(name)
+
+	// Format: [1:opcode][4:payloadLen][2:nameLen][name][4:partitions][8:retentionMs]
+	totalSize := 1 + 4 + 2 + nameLen + 4 + 8
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpSCreateTopic
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(nameLen))
+	pos += 2
+	copy(buf[pos:], name)
+	pos += nameLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(partitions))
+	pos += 4
+
+	binary.BigEndian.PutUint64(buf[pos:], uint64(retentionMs))
+
+	return buf
+}
+
+// EncodeSSubscribeRequest encodes a SSUBSCRIBE request
+func EncodeSSubscribeRequest(topic, group, consumer string) []byte {
+	topicLen := len(topic)
+	groupLen := len(group)
+	consumerLen := len(consumer)
+
+	// Format: [1:opcode][4:payloadLen][2:topicLen][topic][2:groupLen][group][2:consumerLen][consumer]
+	totalSize := 1 + 4 + 2 + topicLen + 2 + groupLen + 2 + consumerLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpSSubscribe
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(topicLen))
+	pos += 2
+	copy(buf[pos:], topic)
+	pos += topicLen
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(groupLen))
+	pos += 2
+	copy(buf[pos:], group)
+	pos += groupLen
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(consumerLen))
+	pos += 2
+	copy(buf[pos:], consumer)
+	pos += consumerLen
+
+	return buf
+}
+
+// EncodeSUnsubscribeRequest encodes a SUNSUBSCRIBE request
+func EncodeSUnsubscribeRequest(topic, group, consumer string) []byte {
+	topicLen := len(topic)
+	groupLen := len(group)
+	consumerLen := len(consumer)
+
+	// Format: [1:opcode][4:payloadLen][2:topicLen][topic][2:groupLen][group][2:consumerLen][consumer]
+	totalSize := 1 + 4 + 2 + topicLen + 2 + groupLen + 2 + consumerLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpSUnsubscribe
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(topicLen))
+	pos += 2
+	copy(buf[pos:], topic)
+	pos += topicLen
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(groupLen))
+	pos += 2
+	copy(buf[pos:], group)
+	pos += groupLen
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(consumerLen))
+	pos += 2
+	copy(buf[pos:], consumer)
+	pos += consumerLen
+
+	return buf
+}
+
+// Decode functions for stream requests
+
+func decodeSPublishRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid SPUBLISH payload")
+	}
+
+	req := &Request{OpCode: OpSPublish}
+	pos := 0
+
+	// Topic
+	topicLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+topicLen {
+		return nil, fmt.Errorf("invalid SPUBLISH payload")
+	}
+	req.Topic = string(payload[pos : pos+topicLen])
+	pos += topicLen
+
+	// Partition
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid SPUBLISH payload")
+	}
+	req.Partition = int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+
+	// Key
+	if len(payload) < pos+2 {
+		return nil, fmt.Errorf("invalid SPUBLISH payload")
+	}
+	keyLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+keyLen {
+		return nil, fmt.Errorf("invalid SPUBLISH payload")
+	}
+	req.Key = string(payload[pos : pos+keyLen])
+	pos += keyLen
+
+	// Value
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid SPUBLISH payload")
+	}
+	valueLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+valueLen {
+		return nil, fmt.Errorf("invalid SPUBLISH payload")
+	}
+	req.Value = payload[pos : pos+valueLen]
+
+	return req, nil
+}
+
+func decodeSConsumeRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid SCONSUME payload")
+	}
+
+	req := &Request{OpCode: OpSConsume}
+	pos := 0
+
+	// Topic
+	topicLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+topicLen {
+		return nil, fmt.Errorf("invalid SCONSUME payload")
+	}
+	req.Topic = string(payload[pos : pos+topicLen])
+	pos += topicLen
+
+	// Group
+	if len(payload) < pos+2 {
+		return nil, fmt.Errorf("invalid SCONSUME payload")
+	}
+	groupLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+groupLen {
+		return nil, fmt.Errorf("invalid SCONSUME payload")
+	}
+	req.Group = string(payload[pos : pos+groupLen])
+	pos += groupLen
+
+	// Consumer
+	if len(payload) < pos+2 {
+		return nil, fmt.Errorf("invalid SCONSUME payload")
+	}
+	consumerLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+consumerLen {
+		return nil, fmt.Errorf("invalid SCONSUME payload")
+	}
+	req.Consumer = string(payload[pos : pos+consumerLen])
+	pos += consumerLen
+
+	// Count
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid SCONSUME payload")
+	}
+	req.Count = int(binary.BigEndian.Uint32(payload[pos:]))
+
+	return req, nil
+}
+
+func decodeSCommitRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid SCOMMIT payload")
+	}
+
+	req := &Request{OpCode: OpSCommit}
+	pos := 0
+
+	// Topic
+	topicLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+topicLen {
+		return nil, fmt.Errorf("invalid SCOMMIT payload")
+	}
+	req.Topic = string(payload[pos : pos+topicLen])
+	pos += topicLen
+
+	// Group
+	if len(payload) < pos+2 {
+		return nil, fmt.Errorf("invalid SCOMMIT payload")
+	}
+	groupLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+groupLen {
+		return nil, fmt.Errorf("invalid SCOMMIT payload")
+	}
+	req.Group = string(payload[pos : pos+groupLen])
+	pos += groupLen
+
+	// Partition
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid SCOMMIT payload")
+	}
+	req.Partition = int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+
+	// Offset
+	if len(payload) < pos+8 {
+		return nil, fmt.Errorf("invalid SCOMMIT payload")
+	}
+	req.RetentionMs = int64(binary.BigEndian.Uint64(payload[pos:])) // Reusing RetentionMs for Offset
+
+	return req, nil
+}
+
+func decodeSCreateTopicRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid SCREATETOPIC payload")
+	}
+
+	req := &Request{OpCode: OpSCreateTopic}
+	pos := 0
+
+	// Name
+	nameLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+nameLen {
+		return nil, fmt.Errorf("invalid SCREATETOPIC payload")
+	}
+	req.Topic = string(payload[pos : pos+nameLen])
+	pos += nameLen
+
+	// Partitions
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid SCREATETOPIC payload")
+	}
+	req.Partition = int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+
+	// RetentionMs
+	if len(payload) < pos+8 {
+		return nil, fmt.Errorf("invalid SCREATETOPIC payload")
+	}
+	req.RetentionMs = int64(binary.BigEndian.Uint64(payload[pos:]))
+
+	return req, nil
+}
+
+func decodeSSubscribeRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid SSUBSCRIBE payload")
+	}
+
+	req := &Request{OpCode: OpSSubscribe}
+	pos := 0
+
+	// Topic
+	topicLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+topicLen {
+		return nil, fmt.Errorf("invalid SSUBSCRIBE payload")
+	}
+	req.Topic = string(payload[pos : pos+topicLen])
+	pos += topicLen
+
+	// Group
+	if len(payload) < pos+2 {
+		return nil, fmt.Errorf("invalid SSUBSCRIBE payload")
+	}
+	groupLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+groupLen {
+		return nil, fmt.Errorf("invalid SSUBSCRIBE payload")
+	}
+	req.Group = string(payload[pos : pos+groupLen])
+	pos += groupLen
+
+	// Consumer
+	if len(payload) < pos+2 {
+		return nil, fmt.Errorf("invalid SSUBSCRIBE payload")
+	}
+	consumerLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+consumerLen {
+		return nil, fmt.Errorf("invalid SSUBSCRIBE payload")
+	}
+	req.Consumer = string(payload[pos : pos+consumerLen])
+
+	return req, nil
+}
+
+func decodeSUnsubscribeRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid SUNSUBSCRIBE payload")
+	}
+
+	req := &Request{OpCode: OpSUnsubscribe}
+	pos := 0
+
+	// Topic
+	topicLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+topicLen {
+		return nil, fmt.Errorf("invalid SUNSUBSCRIBE payload")
+	}
+	req.Topic = string(payload[pos : pos+topicLen])
+	pos += topicLen
+
+	// Group
+	if len(payload) < pos+2 {
+		return nil, fmt.Errorf("invalid SUNSUBSCRIBE payload")
+	}
+	groupLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+groupLen {
+		return nil, fmt.Errorf("invalid SUNSUBSCRIBE payload")
+	}
+	req.Group = string(payload[pos : pos+groupLen])
+	pos += groupLen
+
+	// Consumer
+	if len(payload) < pos+2 {
+		return nil, fmt.Errorf("invalid SUNSUBSCRIBE payload")
+	}
+	consumerLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+consumerLen {
+		return nil, fmt.Errorf("invalid SUNSUBSCRIBE payload")
+	}
+	req.Consumer = string(payload[pos : pos+consumerLen])
+
+	return req, nil
+}
+
+// DocStore Encoding Functions
+
+// EncodeDocInsertRequest encodes a DOCINSERT request
+func EncodeDocInsertRequest(collection string, doc []byte) []byte {
+	collLen := len(collection)
+	docLen := len(doc)
+
+	// Format: [1:opcode][4:payloadLen][2:collLen][collection][4:docLen][doc]
+	totalSize := 1 + 4 + 2 + collLen + 4 + docLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpDocInsert
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(collLen))
+	pos += 2
+	copy(buf[pos:], collection)
+	pos += collLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(docLen))
+	pos += 4
+	copy(buf[pos:], doc)
+
+	return buf
+}
+
+// EncodeDocFindRequest encodes a DOCFIND request
+func EncodeDocFindRequest(collection string, query []byte) []byte {
+	collLen := len(collection)
+	queryLen := len(query)
+
+	// Format: [1:opcode][4:payloadLen][2:collLen][collection][4:queryLen][query]
+	totalSize := 1 + 4 + 2 + collLen + 4 + queryLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpDocFind
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(collLen))
+	pos += 2
+	copy(buf[pos:], collection)
+	pos += collLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(queryLen))
+	pos += 4
+	copy(buf[pos:], query)
+
+	return buf
+}
+
+// EncodeDocUpdateRequest encodes a DOCUPDATE request
+func EncodeDocUpdateRequest(collection string, query, update []byte) []byte {
+	collLen := len(collection)
+	queryLen := len(query)
+	updateLen := len(update)
+
+	// Format: [1:opcode][4:payloadLen][2:collLen][collection][4:queryLen][query][4:updateLen][update]
+	totalSize := 1 + 4 + 2 + collLen + 4 + queryLen + 4 + updateLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpDocUpdate
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(collLen))
+	pos += 2
+	copy(buf[pos:], collection)
+	pos += collLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(queryLen))
+	pos += 4
+	copy(buf[pos:], query)
+	pos += queryLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(updateLen))
+	pos += 4
+	copy(buf[pos:], update)
+
+	return buf
+}
+
+// EncodeDocDeleteRequest encodes a DOCDELETE request
+func EncodeDocDeleteRequest(collection string, query []byte) []byte {
+	collLen := len(collection)
+	queryLen := len(query)
+
+	// Format: [1:opcode][4:payloadLen][2:collLen][collection][4:queryLen][query]
+	totalSize := 1 + 4 + 2 + collLen + 4 + queryLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpDocDelete
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(collLen))
+	pos += 2
+	copy(buf[pos:], collection)
+	pos += collLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(queryLen))
+	pos += 4
+	copy(buf[pos:], query)
+
+	return buf
+}
+
+// DocStore Decoding Functions
+
+func decodeDocInsertRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid DOCINSERT payload")
+	}
+
+	req := &Request{OpCode: OpDocInsert}
+	pos := 0
+
+	// Collection
+	collLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+collLen {
+		return nil, fmt.Errorf("invalid DOCINSERT payload")
+	}
+	req.Collection = string(payload[pos : pos+collLen])
+	pos += collLen
+
+	// Doc (stored in Value)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCINSERT payload")
+	}
+	docLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+docLen {
+		return nil, fmt.Errorf("invalid DOCINSERT payload")
+	}
+	req.Value = payload[pos : pos+docLen]
+
+	return req, nil
+}
+
+func decodeDocFindRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid DOCFIND payload")
+	}
+
+	req := &Request{OpCode: OpDocFind}
+	pos := 0
+
+	// Collection
+	collLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+collLen {
+		return nil, fmt.Errorf("invalid DOCFIND payload")
+	}
+	req.Collection = string(payload[pos : pos+collLen])
+	pos += collLen
+
+	// Query (stored in Value)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCFIND payload")
+	}
+	queryLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+queryLen {
+		return nil, fmt.Errorf("invalid DOCFIND payload")
+	}
+	req.Value = payload[pos : pos+queryLen]
+
+	return req, nil
+}
+
+func decodeDocUpdateRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+
+	req := &Request{OpCode: OpDocUpdate}
+	pos := 0
+
+	// Collection
+	collLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+collLen {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+	req.Collection = string(payload[pos : pos+collLen])
+	pos += collLen
+
+	// Query (stored in Value)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+	queryLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+queryLen {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+	req.Value = payload[pos : pos+queryLen]
+	pos += queryLen
+
+	// Update (stored in Values[0])
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+	updateLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+updateLen {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+	req.Values = [][]byte{payload[pos : pos+updateLen]}
+
+	return req, nil
+}
+
+func decodeDocDeleteRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid DOCDELETE payload")
+	}
+
+	req := &Request{OpCode: OpDocDelete}
+	pos := 0
+
+	// Collection
+	collLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+collLen {
+		return nil, fmt.Errorf("invalid DOCDELETE payload")
+	}
+	req.Collection = string(payload[pos : pos+collLen])
+	pos += collLen
+
+	// Query (stored in Value)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCDELETE payload")
+	}
+	queryLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+queryLen {
+		return nil, fmt.Errorf("invalid DOCDELETE payload")
+	}
+	req.Value = payload[pos : pos+queryLen]
+
+	return req, nil
 }

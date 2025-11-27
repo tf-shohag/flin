@@ -14,7 +14,7 @@ import (
 	"github.com/skshohagmiah/flin/internal/net"
 )
 
-// Client is a smart, cluster-aware Flin KV client with automatic topology discovery
+// Client is the main Flin client
 type Client struct {
 	topology       *ClusterTopology
 	pools          map[string]*net.ConnectionPool // nodeID -> pool
@@ -28,6 +28,9 @@ type Client struct {
 
 	// Queue client (optional)
 	Queue *QueueClient
+
+	// Stream client (optional)
+	Stream *StreamClient
 }
 
 // ClusterTopology represents the cluster state
@@ -58,6 +61,9 @@ type ClientOptions struct {
 
 	// Queue server address (optional, default: KV address with port +1)
 	QueueAddress string
+
+	// Stream server address (optional)
+	StreamAddress string
 
 	// For cluster mode: HTTP addresses for topology discovery
 	HTTPAddresses []string
@@ -187,6 +193,21 @@ func NewClient(opts *ClientOptions) (*Client, error) {
 			client.Queue = queueClient
 		}
 		// Silently ignore queue client creation errors
+	}
+
+	// Initialize Stream client
+	if opts.StreamAddress != "" {
+		streamClient, err := NewStreamClient(opts.StreamAddress, client.poolOpts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create stream client: %w", err)
+		}
+		client.Stream = streamClient
+	} else if opts.Address != "" {
+		// Unified server: Stream is on the same port as KV
+		streamClient, err := NewStreamClient(opts.Address, client.poolOpts)
+		if err == nil {
+			client.Stream = streamClient
+		}
 	}
 
 	return client, nil

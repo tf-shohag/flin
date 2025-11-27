@@ -244,9 +244,9 @@ func main() {
 EOF
 
 # Replace placeholders
-sed -i "s/CONCURRENCY_PLACEHOLDER/$CONCURRENCY/g" main.go
-sed -i "s/DURATION_PLACEHOLDER/$DURATION/g" main.go
-sed -i "s/VALUE_SIZE_PLACEHOLDER/$VALUE_SIZE/g" main.go
+sed -i '' "s/CONCURRENCY_PLACEHOLDER/$CONCURRENCY/g" main.go
+sed -i '' "s/DURATION_PLACEHOLDER/$DURATION/g" main.go
+sed -i '' "s/VALUE_SIZE_PLACEHOLDER/$VALUE_SIZE/g" main.go
 
 echo "📊 Running queue throughput benchmark..."
 echo ""
