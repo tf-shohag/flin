@@ -407,6 +407,14 @@ func DecodeRequest(data []byte) (*Request, error) {
 		return decodeSSubscribeRequest(payload)
 	case OpSUnsubscribe:
 		return decodeSUnsubscribeRequest(payload) // Note: I need to add this function too, I missed it in previous step
+	case OpDocInsert:
+		return decodeDocInsertRequest(payload)
+	case OpDocFind:
+		return decodeDocFindRequest(payload)
+	case OpDocUpdate:
+		return decodeDocUpdateRequest(payload)
+	case OpDocDelete:
+		return decodeDocDeleteRequest(payload)
 	default:
 		return nil, fmt.Errorf("unknown opcode: %d", req.OpCode)
 	}

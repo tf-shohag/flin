@@ -70,6 +70,13 @@ const (
 	OpSUnsubscribe byte = 0x35
 	OpSGetOffsets  byte = 0x36
 
+	// Document operation codes
+	OpDocInsert byte = 0x40
+	OpDocFind   byte = 0x41
+	OpDocUpdate byte = 0x42
+	OpDocDelete byte = 0x43
+	OpDocIndex  byte = 0x44
+
 	// Status codes
 	StatusOK         byte = 0x00
 	StatusError      byte = 0x01
@@ -97,6 +104,9 @@ type Request struct {
 	Consumer    string
 	Count       int
 	RetentionMs int64
+
+	// DocStore fields
+	Collection string
 }
 
 // Response represents a binary response
@@ -396,7 +406,15 @@ func DecodeRequest(data []byte) (*Request, error) {
 	case OpSSubscribe:
 		return decodeSSubscribeRequest(payload)
 	case OpSUnsubscribe:
-		return decodeSUnsubscribeRequest(payload) // Note: I need to add this function too, I missed it in previous step
+		return decodeSUnsubscribeRequest(payload)
+	case OpDocInsert:
+		return decodeDocInsertRequest(payload)
+	case OpDocFind:
+		return decodeDocFindRequest(payload)
+	case OpDocUpdate:
+		return decodeDocUpdateRequest(payload)
+	case OpDocDelete:
+		return decodeDocDeleteRequest(payload)
 	default:
 		return nil, fmt.Errorf("unknown opcode: %d", req.OpCode)
 	}
@@ -762,7 +780,7 @@ func EncodeSConsumeRequest(topic, group, consumer string, count int) []byte {
 }
 
 // EncodeSCommitRequest encodes a SCOMMIT request
-func EncodeSCommitRequest(topic, group string, partition int, offset int64) []byte {
+func EncodeSCommitRequest(topic, group string, partition int, offset uint64) []byte {
 	topicLen := len(topic)
 	groupLen := len(group)
 
@@ -791,7 +809,7 @@ func EncodeSCommitRequest(topic, group string, partition int, offset int64) []by
 	binary.BigEndian.PutUint32(buf[pos:], uint32(partition))
 	pos += 4
 
-	binary.BigEndian.PutUint64(buf[pos:], uint64(offset))
+	binary.BigEndian.PutUint64(buf[pos:], offset)
 
 	return buf
 }
@@ -893,6 +911,122 @@ func EncodeSUnsubscribeRequest(topic, group, consumer string) []byte {
 	pos += 2
 	copy(buf[pos:], consumer)
 	pos += consumerLen
+
+	return buf
+}
+
+// EncodeDocInsertRequest encodes a DOCINSERT request
+func EncodeDocInsertRequest(collection string, doc []byte) []byte {
+	collLen := len(collection)
+	docLen := len(doc)
+
+	// Format: [1:opcode][4:payloadLen][2:collLen][collection][4:docLen][doc]
+	totalSize := 1 + 4 + 2 + collLen + 4 + docLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpDocInsert
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(collLen))
+	pos += 2
+	copy(buf[pos:], collection)
+	pos += collLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(docLen))
+	pos += 4
+	copy(buf[pos:], doc)
+
+	return buf
+}
+
+// EncodeDocFindRequest encodes a DOCFIND request
+func EncodeDocFindRequest(collection string, query []byte) []byte {
+	collLen := len(collection)
+	queryLen := len(query)
+
+	// Format: [1:opcode][4:payloadLen][2:collLen][collection][4:queryLen][query]
+	totalSize := 1 + 4 + 2 + collLen + 4 + queryLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpDocFind
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(collLen))
+	pos += 2
+	copy(buf[pos:], collection)
+	pos += collLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(queryLen))
+	pos += 4
+	copy(buf[pos:], query)
+
+	return buf
+}
+
+// EncodeDocUpdateRequest encodes a DOCUPDATE request
+func EncodeDocUpdateRequest(collection string, updateOpts []byte) []byte {
+	collLen := len(collection)
+	optsLen := len(updateOpts)
+
+	// Format: [1:opcode][4:payloadLen][2:collLen][collection][4:optsLen][opts]
+	totalSize := 1 + 4 + 2 + collLen + 4 + optsLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpDocUpdate
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(collLen))
+	pos += 2
+	copy(buf[pos:], collection)
+	pos += collLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(optsLen))
+	pos += 4
+	copy(buf[pos:], updateOpts)
+
+	return buf
+}
+
+// EncodeDocDeleteRequest encodes a DOCDELETE request
+func EncodeDocDeleteRequest(collection string, deleteOpts []byte) []byte {
+	collLen := len(collection)
+	optsLen := len(deleteOpts)
+
+	// Format: [1:opcode][4:payloadLen][2:collLen][collection][4:optsLen][opts]
+	totalSize := 1 + 4 + 2 + collLen + 4 + optsLen
+	buf := make([]byte, totalSize)
+
+	pos := 0
+	buf[pos] = OpDocDelete
+	pos++
+
+	payloadLen := totalSize - 5
+	binary.BigEndian.PutUint32(buf[pos:], uint32(payloadLen))
+	pos += 4
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(collLen))
+	pos += 2
+	copy(buf[pos:], collection)
+	pos += collLen
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(optsLen))
+	pos += 4
+	copy(buf[pos:], deleteOpts)
 
 	return buf
 }
@@ -1159,6 +1293,132 @@ func decodeSUnsubscribeRequest(payload []byte) (*Request, error) {
 		return nil, fmt.Errorf("invalid SUNSUBSCRIBE payload")
 	}
 	req.Consumer = string(payload[pos : pos+consumerLen])
+
+	return req, nil
+}
+
+// Document store decode functions
+
+func decodeDocInsertRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid DOCINSERT payload")
+	}
+
+	req := &Request{OpCode: OpDocInsert}
+	pos := 0
+
+	// Collection
+	collLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+collLen {
+		return nil, fmt.Errorf("invalid DOCINSERT payload")
+	}
+	req.Collection = string(payload[pos : pos+collLen])
+	pos += collLen
+
+	// Doc (stored in Value)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCINSERT payload")
+	}
+	docLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+docLen {
+		return nil, fmt.Errorf("invalid DOCINSERT payload")
+	}
+	req.Value = payload[pos : pos+docLen]
+
+	return req, nil
+}
+
+func decodeDocFindRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid DOCFIND payload")
+	}
+
+	req := &Request{OpCode: OpDocFind}
+	pos := 0
+
+	// Collection
+	collLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+collLen {
+		return nil, fmt.Errorf("invalid DOCFIND payload")
+	}
+	req.Collection = string(payload[pos : pos+collLen])
+	pos += collLen
+
+	// Query (stored in Value)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCFIND payload")
+	}
+	queryLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+queryLen {
+		return nil, fmt.Errorf("invalid DOCFIND payload")
+	}
+	req.Value = payload[pos : pos+queryLen]
+
+	return req, nil
+}
+
+func decodeDocUpdateRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+
+	req := &Request{OpCode: OpDocUpdate}
+	pos := 0
+
+	// Collection
+	collLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+collLen {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+	req.Collection = string(payload[pos : pos+collLen])
+	pos += collLen
+
+	// Update Options (stored in Value)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+	optsLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+optsLen {
+		return nil, fmt.Errorf("invalid DOCUPDATE payload")
+	}
+	req.Value = payload[pos : pos+optsLen]
+
+	return req, nil
+}
+
+func decodeDocDeleteRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid DOCDELETE payload")
+	}
+
+	req := &Request{OpCode: OpDocDelete}
+	pos := 0
+
+	// Collection
+	collLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+collLen {
+		return nil, fmt.Errorf("invalid DOCDELETE payload")
+	}
+	req.Collection = string(payload[pos : pos+collLen])
+	pos += collLen
+
+	// Query (stored in Value)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid DOCDELETE payload")
+	}
+	queryLen := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+	if len(payload) < pos+queryLen {
+		return nil, fmt.Errorf("invalid DOCDELETE payload")
+	}
+	req.Value = payload[pos : pos+queryLen]
 
 	return req, nil
 }

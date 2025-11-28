@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skshohagmiah/clusterkit"
+	"github.com/skshohagmiah/flin/internal/db"
 	"github.com/skshohagmiah/flin/internal/kv"
 	"github.com/skshohagmiah/flin/internal/queue"
 	"github.com/skshohagmiah/flin/internal/server"
@@ -103,6 +104,15 @@ func main() {
 	}
 	defer streamStore.Close()
 
+	// Create Document store (always disk-based)
+	docDataDir := *dataDir + "/db"
+	fmt.Printf("📦 Creating disk-based Document store at %s...\n", docDataDir)
+	docStore, err := db.New(docDataDir)
+	if err != nil {
+		log.Fatalf("Failed to create document store: %v", err)
+	}
+	defer docStore.Close()
+
 	// Create ClusterKit instance
 	ckOptions := clusterkit.Options{
 		NodeID:            *nodeID,
@@ -133,11 +143,12 @@ func main() {
 
 	log.Printf("✅ ClusterKit started")
 
-	// Initialize unified server (KV + Queue + Stream)
+	// Initialize unified server (KV + Queue + Stream + Document)
 	srv, err := server.NewServerWithWorkers(
 		store,
 		queueStore,
 		streamStore,
+		docStore,
 		ck,
 		*kvPort,
 		*nodeID,
@@ -171,9 +182,7 @@ func main() {
 		fmt.Println("\nShutting down server...")
 		srv.Stop()
 		ck.Stop()
-		store.Close()
-		queueStore.Close()
-		streamStore.Close()
+		// Note: store, queueStore, streamStore, and docStore are closed via defer
 		os.Exit(0)
 	}()
 

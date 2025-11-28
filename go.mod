@@ -4,8 +4,8 @@ go 1.24.4
 
 require (
 	github.com/dgraph-io/badger/v4 v4.8.0
+	github.com/google/uuid v1.6.0
 	github.com/skshohagmiah/clusterkit v0.0.0-20251109051502-d68517bdf923
-	github.com/skshohagmiah/flin/clients/go v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -35,5 +35,3 @@ require (
 	golang.org/x/sys v0.34.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 )
-
-replace github.com/skshohagmiah/flin/clients/go => ./clients/go

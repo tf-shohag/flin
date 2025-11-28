@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/skshohagmiah/clusterkit"
+	"github.com/skshohagmiah/flin/internal/db"
 	"github.com/skshohagmiah/flin/internal/kv"
 	"github.com/skshohagmiah/flin/internal/protocol"
 	"github.com/skshohagmiah/flin/internal/queue"
@@ -30,6 +31,7 @@ type Server struct {
 	store       *kv.KVStore
 	queue       *queue.Queue
 	stream      *stream.Stream
+	db          *db.DocStore
 	ck          *clusterkit.ClusterKit
 	listener    net.Listener
 	connections sync.Map
@@ -109,15 +111,15 @@ const (
 )
 
 // NewServer creates a new distributed KV server with hybrid architecture
-func NewServer(store *kv.KVStore, q *queue.Queue, ck *clusterkit.ClusterKit, addr string, nodeID string) (*Server, error) {
+func NewServer(store *kv.KVStore, q *queue.Queue, docStore *db.DocStore, ck *clusterkit.ClusterKit, addr string, nodeID string) (*Server, error) {
 	// The original NewServer function does not take a stream parameter.
 	// Assuming a nil stream for this call, or it needs to be updated to pass one.
 	// For now, passing nil for stream.
-	return NewServerWithWorkers(store, q, nil, ck, addr, nodeID, DefaultWorkerPoolSize)
+	return NewServerWithWorkers(store, q, nil, docStore, ck, addr, nodeID, DefaultWorkerPoolSize)
 }
 
 // NewServerWithWorkers creates a server with custom worker count
-func NewServerWithWorkers(store *kv.KVStore, q *queue.Queue, stream *stream.Stream, ck *clusterkit.ClusterKit, addr string, nodeID string, workerCount int) (*Server, error) {
+func NewServerWithWorkers(store *kv.KVStore, q *queue.Queue, stream *stream.Stream, docStore *db.DocStore, ck *clusterkit.ClusterKit, addr string, nodeID string, workerCount int) (*Server, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen: %w", err)
@@ -130,7 +132,8 @@ func NewServerWithWorkers(store *kv.KVStore, q *queue.Queue, stream *stream.Stre
 	srv := &Server{
 		store:    store,
 		queue:    q,
-		stream:   stream, // Initialize the new stream field
+		stream:   stream,   // Initialize the new stream field
+		db:       docStore, // Initialize the document store field
 		ck:       ck,
 		listener: listener,
 		nodeID:   nodeID,
@@ -482,8 +485,12 @@ func (c *Connection) writeLoop() {
 func (c *Connection) processRequestHybrid(data []byte) {
 	startTime := time.Now()
 
-	// Detect protocol: binary starts with opcode 0x01-0x12 (KV) or 0x20-0x24 (Queue) or 0x30-0x36 (Stream), text starts with ASCII letters
-	isBinary := len(data) > 0 && ((data[0] >= 0x01 && data[0] <= 0x12) || (data[0] >= 0x20 && data[0] <= 0x24) || (data[0] >= 0x30 && data[0] <= 0x36))
+	// Detect protocol: binary starts with opcode 0x01-0x12 (KV) or 0x20-0x24 (Queue) or 0x30-0x36 (Stream) or 0x40-0x44 (Document), text starts with ASCII letters
+	isBinary := len(data) > 0 && ((data[0] >= 0x01 && data[0] <= 0x12) || (data[0] >= 0x20 && data[0] <= 0x24) || (data[0] >= 0x30 && data[0] <= 0x36) || (data[0] >= 0x40 && data[0] <= 0x44))
+
+	if len(data) > 0 && (data[0] == 0x40 || data[0] == 0x41 || data[0] == 0x42 || data[0] == 0x43) {
+		log.Printf("[DEBUG] Got document opcode: 0x%02x, isBinary=%v", data[0], isBinary)
+	}
 
 	if isBinary {
 		c.processRequestBinary(data, startTime)
@@ -525,10 +532,13 @@ func (c *Connection) processRequestBinary(data []byte, startTime time.Time) {
 	// Parse binary request
 	req, err := protocol.DecodeRequest(data)
 	if err != nil {
+		log.Printf("[BINARY] Decode error: %v", err)
 		c.sendBinaryError(err)
 		c.server.opsErrors.Add(1)
 		return
 	}
+
+	log.Printf("[BINARY] Opcode: 0x%02x", req.OpCode)
 
 	// Process based on opcode
 	switch req.OpCode {
@@ -566,7 +576,20 @@ func (c *Connection) processRequestBinary(data []byte, startTime time.Time) {
 		c.processBinarySSubscribe(req, startTime)
 	case protocol.OpSUnsubscribe:
 		c.processBinarySUnsubscribe(req, startTime)
+	case protocol.OpDocInsert:
+		log.Printf("[BINARY] Routing to DocInsert handler")
+		c.processBinaryDocInsert(req, startTime)
+	case protocol.OpDocFind:
+		log.Printf("[BINARY] Routing to DocFind handler")
+		c.processBinaryDocFind(req, startTime)
+	case protocol.OpDocUpdate:
+		log.Printf("[BINARY] Routing to DocUpdate handler")
+		c.processBinaryDocUpdate(req, startTime)
+	case protocol.OpDocDelete:
+		log.Printf("[BINARY] Routing to DocDelete handler")
+		c.processBinaryDocDelete(req, startTime)
 	default:
+		log.Printf("[BINARY] Unknown opcode: 0x%02x", req.OpCode)
 		c.sendBinaryError(fmt.Errorf("unknown opcode"))
 		c.server.opsErrors.Add(1)
 	}

@@ -2,43 +2,26 @@ package flin
 
 import (
 	"encoding/binary"
-	"fmt"
+	"errors"
 
 	"github.com/skshohagmiah/flin/internal/net"
-	"github.com/skshohagmiah/flin/pkg/protocol"
+	"github.com/skshohagmiah/flin/internal/protocol"
 )
 
-// QueueClient provides queue operations
+// QueueClient handles Message Queue operations
 type QueueClient struct {
-	address string
-	pool    *net.ConnectionPool
-}
-
-// NewQueueClient creates a new queue client
-func NewQueueClient(address string, poolOpts *net.PoolOptions) (*QueueClient, error) {
-	opts := *poolOpts
-	opts.Address = address
-
-	pool, err := net.NewConnectionPool(&opts)
-	if err != nil {
-		return nil, err
-	}
-
-	return &QueueClient{
-		address: address,
-		pool:    pool,
-	}, nil
+	pool *net.ConnectionPool
 }
 
 // Push adds an item to the queue
-func (qc *QueueClient) Push(queueName string, value []byte) error {
-	conn, err := qc.pool.Get()
+func (c *QueueClient) Push(queue string, item []byte) error {
+	conn, err := c.pool.Get()
 	if err != nil {
 		return err
 	}
-	defer qc.pool.Put(conn)
+	defer c.pool.Put(conn)
 
-	request := protocol.EncodeQPushRequest(queueName, value)
+	request := protocol.EncodeQPushRequest(queue, item)
 	if err := conn.Write(request); err != nil {
 		return err
 	}
@@ -46,15 +29,15 @@ func (qc *QueueClient) Push(queueName string, value []byte) error {
 	return readOKResponse(conn)
 }
 
-// Pop removes and returns the first item from the queue
-func (qc *QueueClient) Pop(queueName string) ([]byte, error) {
-	conn, err := qc.pool.Get()
+// Pop removes and returns an item from the queue
+func (c *QueueClient) Pop(queue string) ([]byte, error) {
+	conn, err := c.pool.Get()
 	if err != nil {
 		return nil, err
 	}
-	defer qc.pool.Put(conn)
+	defer c.pool.Put(conn)
 
-	request := protocol.EncodeQPopRequest(queueName)
+	request := protocol.EncodeQPopRequest(queue)
 	if err := conn.Write(request); err != nil {
 		return nil, err
 	}
@@ -62,15 +45,15 @@ func (qc *QueueClient) Pop(queueName string) ([]byte, error) {
 	return readValueResponse(conn)
 }
 
-// Peek returns the first item without removing it
-func (qc *QueueClient) Peek(queueName string) ([]byte, error) {
-	conn, err := qc.pool.Get()
+// Peek returns the next item without removing it
+func (c *QueueClient) Peek(queue string) ([]byte, error) {
+	conn, err := c.pool.Get()
 	if err != nil {
 		return nil, err
 	}
-	defer qc.pool.Put(conn)
+	defer c.pool.Put(conn)
 
-	request := protocol.EncodeQPeekRequest(queueName)
+	request := protocol.EncodeQPeekRequest(queue)
 	if err := conn.Write(request); err != nil {
 		return nil, err
 	}
@@ -79,14 +62,14 @@ func (qc *QueueClient) Peek(queueName string) ([]byte, error) {
 }
 
 // Len returns the number of items in the queue
-func (qc *QueueClient) Len(queueName string) (uint64, error) {
-	conn, err := qc.pool.Get()
+func (c *QueueClient) Len(queue string) (int64, error) {
+	conn, err := c.pool.Get()
 	if err != nil {
 		return 0, err
 	}
-	defer qc.pool.Put(conn)
+	defer c.pool.Put(conn)
 
-	request := protocol.EncodeQLenRequest(queueName)
+	request := protocol.EncodeQLenRequest(queue)
 	if err := conn.Write(request); err != nil {
 		return 0, err
 	}
@@ -97,29 +80,24 @@ func (qc *QueueClient) Len(queueName string) (uint64, error) {
 	}
 
 	if len(value) != 8 {
-		return 0, fmt.Errorf("invalid length response")
+		return 0, errors.New("invalid length value")
 	}
 
-	return binary.BigEndian.Uint64(value), nil
+	return int64(binary.BigEndian.Uint64(value)), nil
 }
 
 // Clear removes all items from the queue
-func (qc *QueueClient) Clear(queueName string) error {
-	conn, err := qc.pool.Get()
+func (c *QueueClient) Clear(queue string) error {
+	conn, err := c.pool.Get()
 	if err != nil {
 		return err
 	}
-	defer qc.pool.Put(conn)
+	defer c.pool.Put(conn)
 
-	request := protocol.EncodeQClearRequest(queueName)
+	request := protocol.EncodeQClearRequest(queue)
 	if err := conn.Write(request); err != nil {
 		return err
 	}
 
 	return readOKResponse(conn)
-}
-
-// Close closes the queue client
-func (qc *QueueClient) Close() error {
-	return qc.pool.Close()
 }

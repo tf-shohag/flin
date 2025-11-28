@@ -22,8 +22,9 @@ type Stream struct {
 	groupsMu sync.RWMutex
 
 	// Background tasks
-	stopChan chan struct{}
-	wg       sync.WaitGroup
+	stopChan  chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // ConsumerGroup manages consumers and partition assignments
@@ -328,7 +329,9 @@ func (s *Stream) Commit(topic, group string, partition int, offset int64) error 
 
 // Close closes the stream system
 func (s *Stream) Close() error {
-	close(s.stopChan)
+	s.closeOnce.Do(func() {
+		close(s.stopChan)
+	})
 	s.wg.Wait()
 	return s.storage.Close()
 }
