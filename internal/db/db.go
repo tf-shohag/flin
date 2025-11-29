@@ -155,14 +155,14 @@ func (ds *DocStore) Find(collection string, opts FindOptions) ([]Document, error
 	if canUseIndex {
 		// Use index-based retrieval - much faster for filtered queries
 		// (even if empty, it means the index confirmed no matches)
-		
+
 		// Apply pagination to index results first to avoid unnecessary deserialization
 		startIdx := opts.Skip
 		endIdx := opts.Skip + opts.Limit
 		if opts.Limit < 0 {
 			endIdx = len(docIDs)
 		}
-		
+
 		// Bounds check
 		if startIdx >= len(docIDs) {
 			// Pagination skip goes past all results
@@ -171,7 +171,7 @@ func (ds *DocStore) Find(collection string, opts FindOptions) ([]Document, error
 		if endIdx > len(docIDs) {
 			endIdx = len(docIDs)
 		}
-		
+
 		// Only deserialize documents we actually need
 		for i := startIdx; i < endIdx && i < len(docIDs); i++ {
 			id := docIDs[i]
