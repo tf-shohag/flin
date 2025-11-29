@@ -115,16 +115,16 @@ func main() {
 		value[i] = byte(i % 256)
 	}
 
-	// Create 4 topics (shared by all workers to avoid resource exhaustion)
-	numTopics := 4
+	// Create 1 topic with concurrency-based partitions for maximum parallelism
+	// (each worker gets dedicated partition to eliminate lock contention)
+	numPartitions := concurrency
 	fmt.Println("📝 Creating topics...")
-	for i := 0; i < numTopics; i++ {
-		topicName := fmt.Sprintf("bench_topic_%d", i)
-		err := client.Stream.CreateTopic(topicName, 2, 0) // 2 partitions per topic
-		if err != nil {
-			fmt.Printf("Warning: Failed to create topic: %v\\n", err)
-		}
+	topicName := "bench_topic_0"
+	err = client.Stream.CreateTopic(topicName, numPartitions, 0)
+	if err != nil {
+		fmt.Printf("Warning: Failed to create topic: %v\\n", err)
 	}
+	time.Sleep(500 * time.Millisecond) // Wait for topic creation
 
 	// Run PUBLISH test
 	fmt.Println("🔴 PUBLISH Test (Append operations)")
@@ -141,11 +141,12 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 
-			// Workers share topics (round-robin)
-			topicName := fmt.Sprintf("bench_topic_%d", workerID % numTopics)
+			// Each worker gets its own partition to eliminate lock contention
+			topicName := "bench_topic_0"
+			partition := workerID % numPartitions
 			ops := int64(0)
 			for time.Now().Before(stopTime) {
-				if err := client.Stream.Publish(topicName, 0, "", value); err == nil {
+				if err := client.Stream.Publish(topicName, partition, "", value); err == nil {
 					ops++
 				}
 			}
@@ -189,10 +190,11 @@ func main() {
 
 	var subOps atomic.Int64
 	
-	// Subscribe first (each worker subscribes to its assigned topic)
+	// Subscribe first (each worker subscribes to its assigned partition)
 	for i := 0; i < concurrency; i++ {
-		topicName := fmt.Sprintf("bench_topic_%d", i % numTopics)
-		groupName := fmt.Sprintf("bench_group_%d", i % numTopics)
+		topicName := "bench_topic_0"
+		partition := i % numPartitions
+		groupName := fmt.Sprintf("bench_group_%d", partition)
 		consumerName := fmt.Sprintf("consumer_%d", i)
 		client.Stream.Subscribe(topicName, groupName, consumerName)
 	}
@@ -205,9 +207,10 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 
-			// Workers share topics (round-robin)
-			topicName := fmt.Sprintf("bench_topic_%d", workerID % numTopics)
-			groupName := fmt.Sprintf("bench_group_%d", workerID % numTopics)
+			// Each worker consumes from its assigned partition
+			topicName := "bench_topic_0"
+			partition := workerID % numPartitions
+			groupName := fmt.Sprintf("bench_group_%d", partition)
 			consumerName := fmt.Sprintf("consumer_%d", workerID)
 			
 			ops := int64(0)
