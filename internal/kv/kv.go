@@ -42,6 +42,21 @@ func New(path string) (*KVStore, error) {
 	}, nil
 }
 
+// NewSharded creates a new sharded KV store for higher concurrency
+// Uses N independent storage shards to eliminate lock contention
+// Recommended for high-concurrency workloads (64+ concurrent workers)
+func NewSharded(path string, shardCount int) (*KVStore, error) {
+	store, err := storage.NewShardedKVStorage(path, shardCount)
+	if err != nil {
+		return nil, err
+	}
+
+	return &KVStore{
+		storage:  store,
+		isMemory: false,
+	}, nil
+}
+
 // NewMemory creates a new in-memory KV store (like Redis)
 func NewMemory() (*KVStore, error) {
 	store, err := storage.NewMemoryStorage()
