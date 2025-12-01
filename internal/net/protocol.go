@@ -55,20 +55,24 @@ const (
 	OpMDel   byte = 0x12
 
 	// Queue operation codes
-	OpQPush  byte = 0x20
-	OpQPop   byte = 0x21
-	OpQPeek  byte = 0x22
-	OpQLen   byte = 0x23
-	OpQClear byte = 0x24
+	OpQPush   byte = 0x20
+	OpQPop    byte = 0x21
+	OpQPeek   byte = 0x22
+	OpQLen    byte = 0x23
+	OpQClear  byte = 0x24
+	OpQPopMsg byte = 0x25 // Pop with acknowledgment
+	OpQAck    byte = 0x26 // Acknowledge message
+	OpQNack   byte = 0x27 // Negative acknowledge (requeue)
 
 	// Stream operation codes
-	OpSPublish     byte = 0x30
-	OpSConsume     byte = 0x31
-	OpSCommit      byte = 0x32
-	OpSCreateTopic byte = 0x33
-	OpSSubscribe   byte = 0x34
-	OpSUnsubscribe byte = 0x35
-	OpSGetOffsets  byte = 0x36
+	OpSPublish      byte = 0x30
+	OpSConsume      byte = 0x31
+	OpSCommit       byte = 0x32
+	OpSCreateTopic  byte = 0x33
+	OpSSubscribe    byte = 0x34
+	OpSUnsubscribe  byte = 0x35
+	OpSGetOffsets   byte = 0x36
+	OpSPublishBatch byte = 0x37 // Stream Publish Batch
 
 	// Document operation codes
 	OpDocInsert byte = 0x40
@@ -81,12 +85,13 @@ const (
 	StatusOK         byte = 0x00
 	StatusError      byte = 0x01
 	StatusNotFound   byte = 0x02
-	StatusMultiValue byte = 0x03
+	StatusKeyExists  byte = 0x03
+	StatusMultiValue byte = 0x04
 
 	// Protocol constants
 	MaxKeyLen    = 65535   // 2 bytes
+	MaxBatchSize = 10000   // Max messages per batch
 	MaxValueLen  = 1 << 30 // 1GB
-	MaxBatchSize = 10000   // Maximum keys per batch
 )
 
 // Request represents a parsed binary request
@@ -97,6 +102,13 @@ type Request struct {
 	Keys   []string
 	Values [][]byte
 
+	// Queue fields
+	QueueName         string
+	ConsumerID        string
+	MessageID         string
+	VisibilityTimeout int64 // milliseconds
+	Requeue           bool
+
 	// Stream fields
 	Topic       string
 	Partition   int
@@ -104,9 +116,20 @@ type Request struct {
 	Consumer    string
 	Count       int
 	RetentionMs int64
+	Offset      int64 // Added Offset for stream operations
+
+	// Batch operations
+	BatchMessages []*BatchMessage
 
 	// DocStore fields
 	Collection string
+}
+
+// BatchMessage represents a single message in a batch
+type BatchMessage struct {
+	Partition int
+	Key       string
+	Value     []byte
 }
 
 // Response represents a binary response
@@ -403,6 +426,8 @@ func DecodeRequest(data []byte) (*Request, error) {
 		return decodeSCommitRequest(payload)
 	case OpSCreateTopic:
 		return decodeSCreateTopicRequest(payload)
+	case OpSPublishBatch:
+		return decodeSPublishBatchRequest(payload)
 	case OpSSubscribe:
 		return decodeSSubscribeRequest(payload)
 	case OpSUnsubscribe:
@@ -1483,4 +1508,115 @@ func decodeDocIndexRequest(payload []byte) (*Request, error) {
 	req.Key = string(payload[pos : pos+fieldLen])
 
 	return req, nil
+}
+
+func decodeSPublishBatchRequest(payload []byte) (*Request, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("invalid SPUBLISHBATCH payload")
+	}
+
+	req := &Request{OpCode: OpSPublishBatch}
+	pos := 0
+
+	// Topic
+	topicLen := int(binary.BigEndian.Uint16(payload[pos:]))
+	pos += 2
+	if len(payload) < pos+topicLen {
+		return nil, fmt.Errorf("invalid SPUBLISHBATCH payload")
+	}
+	req.Topic = string(payload[pos : pos+topicLen])
+	pos += topicLen
+
+	// Count (number of messages)
+	if len(payload) < pos+4 {
+		return nil, fmt.Errorf("invalid SPUBLISHBATCH payload")
+	}
+	count := int(binary.BigEndian.Uint32(payload[pos:]))
+	pos += 4
+
+	if count > MaxBatchSize {
+		return nil, fmt.Errorf("batch size %d exceeds maximum %d", count, MaxBatchSize)
+	}
+
+	req.BatchMessages = make([]*BatchMessage, count)
+
+	for i := 0; i < count; i++ {
+		msg := &BatchMessage{}
+
+		// Partition
+		if len(payload) < pos+4 {
+			return nil, fmt.Errorf("invalid SPUBLISHBATCH payload")
+		}
+		msg.Partition = int(binary.BigEndian.Uint32(payload[pos:]))
+		pos += 4
+
+		// Key
+		if len(payload) < pos+2 {
+			return nil, fmt.Errorf("invalid SPUBLISHBATCH payload")
+		}
+		keyLen := int(binary.BigEndian.Uint16(payload[pos:]))
+		pos += 2
+		if len(payload) < pos+keyLen {
+			return nil, fmt.Errorf("invalid SPUBLISHBATCH payload")
+		}
+		msg.Key = string(payload[pos : pos+keyLen])
+		pos += keyLen
+
+		// Value
+		if len(payload) < pos+4 {
+			return nil, fmt.Errorf("invalid SPUBLISHBATCH payload")
+		}
+		valLen := int(binary.BigEndian.Uint32(payload[pos:]))
+		pos += 4
+		if len(payload) < pos+valLen {
+			return nil, fmt.Errorf("invalid SPUBLISHBATCH payload")
+		}
+		msg.Value = make([]byte, valLen)
+		copy(msg.Value, payload[pos:pos+valLen])
+		pos += valLen
+
+		req.BatchMessages[i] = msg
+	}
+
+	return req, nil
+}
+
+func EncodeSPublishBatchRequest(topic string, messages []*BatchMessage) []byte {
+	// Calculate size
+	// OpCode(1) + TopicLen(2) + Topic + Count(4) + (Partition(4) + KeyLen(2) + Key + ValueLen(4) + Value)...
+	size := 1 + 2 + len(topic) + 4
+	for _, msg := range messages {
+		size += 4 + 2 + len(msg.Key) + 4 + len(msg.Value)
+	}
+
+	buf := make([]byte, size)
+	pos := 0
+
+	buf[pos] = OpSPublishBatch
+	pos++
+
+	binary.BigEndian.PutUint16(buf[pos:], uint16(len(topic)))
+	pos += 2
+	copy(buf[pos:], topic)
+	pos += len(topic)
+
+	binary.BigEndian.PutUint32(buf[pos:], uint32(len(messages)))
+	pos += 4
+
+	for _, msg := range messages {
+		binary.BigEndian.PutUint32(buf[pos:], uint32(msg.Partition))
+		pos += 4
+
+		binary.BigEndian.PutUint16(buf[pos:], uint16(len(msg.Key)))
+		pos += 2
+		copy(buf[pos:], msg.Key)
+		pos += len(msg.Key)
+
+		binary.BigEndian.PutUint32(buf[pos:], uint32(len(msg.Value)))
+		pos += 4
+		copy(buf[pos:], msg.Value)
+		pos += len(msg.Value)
+	}
+
+	return buf
 }

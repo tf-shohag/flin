@@ -574,6 +574,8 @@ func (c *Connection) processRequestBinary(data []byte, startTime time.Time) {
 		c.processBinarySCommit(req, startTime)
 	case protocol.OpSCreateTopic:
 		c.processBinarySCreateTopic(req, startTime)
+	case protocol.OpSPublishBatch:
+		c.processBinarySPublishBatch(req, startTime)
 	case protocol.OpSSubscribe:
 		c.processBinarySSubscribe(req, startTime)
 	case protocol.OpSUnsubscribe:

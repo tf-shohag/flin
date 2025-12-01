@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
@@ -18,10 +19,15 @@ import (
 type StreamStorage struct {
 	db *badger.DB
 
-	// Per-partition locks to reduce contention
-	// Key: "topic:partition"
-	partitionLocks map[string]*sync.RWMutex
-	partitionMu    sync.Mutex // Only lock for partition map access
+	// Atomic offset counters for lock-free writes (key: "topic:partition")
+	partitionOffsets map[string]*atomic.Int64
+	offsetsMu        sync.RWMutex
+
+	// Write buffer for batching
+	writeBuffer   map[string][]*Message // key: "topic:partition"
+	writeBufferMu sync.Mutex
+	flushTicker   *time.Ticker
+	stopFlush     chan struct{}
 }
 
 // Message represents a stream message
@@ -53,9 +59,9 @@ type ConsumerOffset struct {
 }
 
 // NewStreamStorage creates a new stream storage instance
-func NewStorage(path string) (*StreamStorage, error) {
-	opts := badger.DefaultOptions(path)
-	opts.Logger = nil // Disable badger logging
+func NewStorage(dataDir string) (*StreamStorage, error) {
+	opts := badger.DefaultOptions(dataDir)
+	opts.Logger = nil // Disable default logger
 
 	// Optimize for high throughput scenarios
 	opts.NumVersionsToKeep = 1   // Only keep 1 version (no MVCC overhead)
@@ -65,85 +71,62 @@ func NewStorage(path string) (*StreamStorage, error) {
 
 	db, err := badger.Open(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open badger: %w", err)
+		return nil, fmt.Errorf("failed to open badger db: %w", err)
 	}
 
-	return &StreamStorage{
-		db:             db,
-		partitionLocks: make(map[string]*sync.RWMutex),
-	}, nil
-}
-
-// getPartitionLock returns the lock for a topic:partition pair
-func (s *StreamStorage) getPartitionLock(topic string, partition int) *sync.RWMutex {
-	key := fmt.Sprintf("%s:%d", topic, partition)
-	s.partitionMu.Lock()
-	defer s.partitionMu.Unlock()
-
-	lock, exists := s.partitionLocks[key]
-	if !exists {
-		lock = &sync.RWMutex{}
-		s.partitionLocks[key] = lock
+	storage := &StreamStorage{
+		db:               db,
+		partitionOffsets: make(map[string]*atomic.Int64),
+		writeBuffer:      make(map[string][]*Message),
+		flushTicker:      time.NewTicker(10 * time.Millisecond), // Flush every 10ms
+		stopFlush:        make(chan bool),
+		flushCh:          make(chan bool, 1), // Buffer of 1 to avoid blocking
 	}
-	return lock
+
+	// Initialize atomic offsets from DB (lazy loading is implemented in getPartitionOffset)
+	// But we can also scan keys here if needed. For now, lazy load is fine.
+
+	// Start flush worker
+	go storage.flushWorker()
+
+	return storage, nil
 }
 
 // AppendMessage appends a message to a topic partition and returns the assigned offset
+// Uses atomic operations for lock-free offset increment and buffers writes
 func (s *StreamStorage) AppendMessage(topic string, partition int, key string, value []byte) (int64, error) {
-	// Use per-partition lock instead of global lock
-	partLock := s.getPartitionLock(topic, partition)
-	partLock.Lock()
-	defer partLock.Unlock()
+	// Atomic offset increment (lock-free)
+	offset := s.getPartitionOffset(topic, partition).Add(1)
 
-	var offset int64
-	err := s.db.Update(func(txn *badger.Txn) error {
-		// Get current offset for this partition
-		offsetKey := makeOffsetKey(topic, partition)
-		item, err := txn.Get([]byte(offsetKey))
-		if err == badger.ErrKeyNotFound {
-			offset = 0
-		} else if err != nil {
-			return err
-		} else {
-			err = item.Value(func(val []byte) error {
-				offset = int64(binary.BigEndian.Uint64(val)) + 1
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
+	// Create message
+	msg := &Message{
+		Topic:     topic,
+		Partition: partition,
+		Offset:    offset,
+		Key:       key,
+		Value:     value,
+		Timestamp: time.Now().UnixMilli(),
+	}
 
-		// Store the message
-		msgKey := makeMessageKey(topic, partition, offset)
-		msg := &Message{
-			Topic:     topic,
-			Partition: partition,
-			Offset:    offset,
-			Key:       key,
-			Value:     value,
-			Timestamp: time.Now().UnixMilli(),
-		}
-		msgData := encodeMessage(msg)
-		if err := txn.Set([]byte(msgKey), msgData); err != nil {
-			return err
-		}
+	// Buffer write for batching
+	partKey := fmt.Sprintf("%s:%d", topic, partition)
+	s.writeBufferMu.Lock()
+	s.writeBuffer[partKey] = append(s.writeBuffer[partKey], msg)
+	bufferSize := len(s.writeBuffer[partKey])
+	s.writeBufferMu.Unlock()
 
-		// Update offset
-		offsetData := make([]byte, 8)
-		binary.BigEndian.PutUint64(offsetData, uint64(offset))
-		return txn.Set([]byte(offsetKey), offsetData)
-	})
+	// Flush if buffer is large (1000 messages)
+	if bufferSize >= 1000 {
+		go s.flushWrites()
+	}
 
-	return offset, err
+	return offset, nil
 }
 
 // FetchMessages retrieves messages from a topic partition starting at the given offset
 func (s *StreamStorage) FetchMessages(topic string, partition int, startOffset int64, maxCount int) ([]*Message, error) {
-	// Use per-partition lock instead of global lock
-	partLock := s.getPartitionLock(topic, partition)
-	partLock.RLock()
-	defer partLock.RUnlock()
+	// Flush pending writes to ensure read-after-write consistency
+	s.flushWrites()
 
 	messages := make([]*Message, 0, maxCount)
 
@@ -182,36 +165,13 @@ func (s *StreamStorage) FetchMessages(topic string, partition int, startOffset i
 
 // GetOffset returns the current offset for a topic partition
 func (s *StreamStorage) GetOffset(topic string, partition int) (int64, error) {
-	// Use per-partition lock instead of global lock
-	partLock := s.getPartitionLock(topic, partition)
-	partLock.RLock()
-	defer partLock.RUnlock()
-
-	var offset int64 = -1
-	err := s.db.View(func(txn *badger.Txn) error {
-		offsetKey := makeOffsetKey(topic, partition)
-		item, err := txn.Get([]byte(offsetKey))
-		if err == badger.ErrKeyNotFound {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		return item.Value(func(val []byte) error {
-			offset = int64(binary.BigEndian.Uint64(val))
-			return nil
-		})
-	})
-	return offset, err
+	// Try atomic counter first
+	offset := s.getPartitionOffset(topic, partition)
+	return offset.Load(), nil
 }
 
 // CommitOffset stores the consumer group's offset for a topic partition
 func (s *StreamStorage) CommitOffset(group, topic string, partition int, offset int64) error {
-	// Use per-partition lock instead of global lock
-	partLock := s.getPartitionLock(topic, partition)
-	partLock.Lock()
-	defer partLock.Unlock()
-
 	return s.db.Update(func(txn *badger.Txn) error {
 		key := makeConsumerOffsetKey(group, topic, partition)
 		data := make([]byte, 16) // 8 bytes offset + 8 bytes timestamp
@@ -223,11 +183,6 @@ func (s *StreamStorage) CommitOffset(group, topic string, partition int, offset 
 
 // GetConsumerOffset retrieves the consumer group's offset for a topic partition
 func (s *StreamStorage) GetConsumerOffset(group, topic string, partition int) (int64, error) {
-	// Use per-partition lock instead of global lock
-	partLock := s.getPartitionLock(topic, partition)
-	partLock.RLock()
-	defer partLock.RUnlock()
-
 	var offset int64 = 0
 	err := s.db.View(func(txn *badger.Txn) error {
 		key := makeConsumerOffsetKey(group, topic, partition)
@@ -278,11 +233,6 @@ func (s *StreamStorage) GetTopicMetadata(topic string) (*TopicMetadata, error) {
 
 // DeleteOldMessages removes messages older than retention policy
 func (s *StreamStorage) DeleteOldMessages(topic string, partition int, retentionMs int64) (int, error) {
-	// Use per-partition lock instead of global lock
-	partLock := s.getPartitionLock(topic, partition)
-	partLock.Lock()
-	defer partLock.Unlock()
-
 	cutoffTime := time.Now().UnixMilli() - retentionMs
 	deleted := 0
 
@@ -325,8 +275,11 @@ func (s *StreamStorage) DeleteOldMessages(topic string, partition int, retention
 	return deleted, err
 }
 
-// Close closes the storage
+// Close closes the storage and flushes pending writes
 func (s *StreamStorage) Close() error {
+	close(s.stopFlush)
+	s.flushTicker.Stop()
+	s.flushWrites() // Final flush
 	return s.db.Close()
 }
 
