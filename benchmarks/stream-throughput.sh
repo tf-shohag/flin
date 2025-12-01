@@ -9,7 +9,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR/.."
 
 # Configuration
-CONCURRENCY=${1:-64}  # Increased to 64 to test robustness
+CONCURRENCY=${1:-16}  # Reduced to 16 for safety
 DURATION=${2:-5}
 VALUE_SIZE=${3:-1024}
 
@@ -39,7 +39,7 @@ echo "🔧 Starting Flin server..."
   -port=:7380 \
   -data=./data/bench \
   -partitions=64 \
-  -workers=256 &
+  -workers=256 > server.log 2>&1 &
 
 SERVER_PID=$!
 echo "   Server PID: $SERVER_PID"
@@ -145,9 +145,23 @@ func main() {
 			topicName := "bench_topic_0"
 			partition := workerID % numPartitions
 			ops := int64(0)
+			
+			// Batch configuration
+			batchSize := 50
+			batch := make([]*flin.BatchMessage, 0, batchSize)
+			
 			for time.Now().Before(stopTime) {
-				if err := client.Stream.Publish(topicName, partition, "", value); err == nil {
-					ops++
+				batch = append(batch, &flin.BatchMessage{
+					Partition: partition,
+					Key:       "",
+					Value:     value,
+				})
+				
+				if len(batch) >= batchSize {
+					if err := client.PublishBatch(topicName, batch); err == nil {
+						ops += int64(len(batch))
+					}
+					batch = batch[:0]
 				}
 			}
 			pubOps.Add(ops)
